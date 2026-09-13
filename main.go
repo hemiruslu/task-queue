@@ -46,38 +46,38 @@ func (js *JobStore) GetStatus(id int) (string, bool) {
 	return status, exists
 }
 
-// İşçilere ne zaman mesaiyi bitireceklerini bilmeleri için WaitGroup ekledik
+// Pass WaitGroup to synchronize worker termination
 func worker(id int, jobs <-chan Job, store *JobStore, wg *sync.WaitGroup) {
-	defer wg.Done() // İşçi tamamen kapandığında gruba haber ver
+	defer wg.Done() // Notify the group when the worker has fully shut down
 
 	for j := range jobs {
 		store.SetStatus(j.ID, "Processing")
-		fmt.Printf("👷 Worker %d processing -> Job: %d (%s)\n", id, j.ID, j.Payload)
+		fmt.Printf("Worker %d processing -> Job: %d (%s)\n", id, j.ID, j.Payload)
 
 		time.Sleep(5 * time.Second)
 
 		store.SetStatus(j.ID, "Completed")
-		fmt.Printf("✅ Worker %d finished   -> Job: %d\n", id, j.ID)
+		fmt.Printf("Worker %d finished   -> Job: %d\n", id, j.ID)
 	}
 }
 
 func main() {
 	const numWorkers = 3
 	jobs := make(chan Job, 100)
-	var wg sync.WaitGroup // İşçileri senkronize etmek için
+	var wg sync.WaitGroup // To synchronize the workers
 
 	store := &JobStore{
 		statuses: make(map[int]string),
 		nextID:   1,
 	}
 
-	fmt.Println("🚀 Booting up Worker Pool...")
+	fmt.Println("Booting up Worker Pool...")
 	for w := 1; w <= numWorkers; w++ {
 		wg.Add(1)
 		go worker(w, jobs, store, &wg)
 	}
 
-	// Route'ları yönetmek için Mux oluşturuyoruz
+	// Create a Mux to manage routes
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/add", func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +106,7 @@ func main() {
 		default:
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"error": "Sistem şu an çok yoğun, lütfen daha sonra tekrar deneyin."}`))
+			w.Write([]byte(`{"error": "System is currently overloaded, please try again later."}`))
 		}
 	})
 
@@ -136,38 +136,38 @@ func main() {
 		})
 	})
 
-	// HTTP sunucusunu bir objeye atıyoruz ki sonradan kapatabilelim
+	// Assign the HTTP server to an object so it can be shut down gracefully
 	srv := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
 
-	// Sunucuyu arka planda (goroutine) başlatıyoruz
+	// Start the server in the background (goroutine)
 	go func() {
-		fmt.Println("🌐 Server is running on http://localhost:8080...")
+		fmt.Println("Server is running on http://localhost:8080...")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("HTTP server error: %v\n", err)
 		}
 	}()
 
-	// GRACEFUL SHUTDOWN (GÜVENLİ KAPANIŞ) MİMARİSİ
+	// GRACEFUL SHUTDOWN ARCHITECTURE
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM) // Ctrl+C sinyalini dinle
-	<-quit                                             // Sinyal gelene kadar ana thread burada bekler (bloklanır)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM) // Listen for the Ctrl+C signal
+	<-quit                                             // The main thread blocks here until a signal is received
 
-	fmt.Println("\n🛑 Shutdown signal received, initiating graceful shutdown...")
+	fmt.Println("\nShutdown signal received, initiating graceful shutdown...")
 
-	// 1. Yeni HTTP isteklerini reddet (Mevcutların bitmesi için max 5 saniye ver)
+	// 1. Reject new HTTP requests (allow max 5 seconds for existing ones to finish)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
 
-	// 2. Kanalları kapat ki işçiler yeni iş aramasın
+	// 2. Close the channels so workers stop looking for new jobs
 	close(jobs)
 
-	// 3. İçeride hala çalışmakta olan işçilerin bitirmesini bekle
-	fmt.Println("⏳ Waiting for active workers to finish their tasks...")
+	// 3. Wait for workers still processing inside to finish
+	fmt.Println("Waiting for active workers to finish their tasks...")
 	wg.Wait()
 
-	fmt.Println("✨ System shutdown successfully without data loss.")
+	fmt.Println("System shutdown successfully without data loss.")
 }
